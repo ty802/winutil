@@ -10,7 +10,7 @@
     Author         : Chris Titus @christitustech
     Runspace Author: @DeveloperDurp
     GitHub         : https://github.com/ChrisTitusTech
-    Version        : 24.04.21
+    Version        : 24.05.10
 #>
 param (
     [switch]$Debug,
@@ -47,7 +47,7 @@ Add-Type -AssemblyName System.Windows.Forms
 # Variable to sync between runspaces
 $sync = [Hashtable]::Synchronized(@{})
 $sync.PSScriptRoot = $PSScriptRoot
-$sync.version = "24.04.21"
+$sync.version = "24.05.10"
 $sync.configs = @{}
 $sync.ProcessRunning = $false
 
@@ -421,19 +421,16 @@ Function Get-WinUtilCheckBoxes {
         $group = if ($CheckBox.Key.StartsWith("WPFInstall")) { "Install" }
                 elseif ($CheckBox.Key.StartsWith("WPFTweaks")) { "WPFTweaks" }
                 elseif ($CheckBox.Key.StartsWith("WPFFeature")) { "WPFFeature" }
-
         if ($group) {
             if ($CheckBox.Value.IsChecked -eq $true) {
                 $feature = switch ($group) {
                     "Install" {
                         # Get the winget value
-                        $wingetValue = $sync.configs.applications.$($CheckBox.Name).winget
-
-                        if (-not [string]::IsNullOrWhiteSpace($wingetValue) -and $wingetValue -ne "na") {
-                            $wingetValue -split ";"
-                        } else {
-                            $sync.configs.applications.$($CheckBox.Name).choco
+                        [PSCustomObject]@{
+                            "winget"=$sync.configs.applications.$($CheckBox.Name).winget;
+                            "choco"=$sync.configs.applications.$($CheckBox.Name).choco;
                         }
+
                     }
                     default {
                         $CheckBox.Name
@@ -697,6 +694,59 @@ function Install-WinUtilChoco {
     }
 
 }
+function Install-WinUtilProgramChoco {
+}
+Function Install-WinUtilProgramWinget {
+    
+    <#
+    .SYNOPSIS
+    Manages the provided programs using Winget
+    
+    .PARAMETER ProgramsToInstall
+    A list of programs to manage
+    
+    .PARAMETER manage
+    The action to perform on the programs, can be either 'Installing' or 'Uninstalling'
+    
+    .NOTES
+    The triple quotes are required any time you need a " in a normal script block.
+    #>
+    
+    param(
+    $ProgramsToInstall,
+    $manage = "Installing"
+    )
+    
+    $x = 0
+    $count = $ProgramsToInstall.Count
+    
+    Write-Progress -Activity "$manage Applications" -Status "Starting" -PercentComplete 0
+    
+    Foreach ($Program in $ProgramsToInstall){
+        Write-Progress -Activity "$manage Applications" -Status "$manage $($Program.choco) $($x + 1) of $count" -PercentComplete $($x/$count*100)
+        if($manage -eq "Installing"){
+            try{
+                Write-Host "Attempting installation with Chocolatey as a fallback method"
+                $chocoStatus = $(Start-Process -FilePath "choco" -ArgumentList "install $($Program.choco) -y" -Wait -PassThru).ExitCode
+                if($chocoStatus -eq 0){
+                    Write-Host "$($Program.choco) installed successfully using Chocolatey."
+                    continue
+                } else {
+                    Write-Host "Failed to install $($Program.choco) using Chocolatey."
+                }
+                Write-Host "Failed to install $($Program.choco)."
+            } catch {
+                Write-Host "Failed to install $($Program.choco) due to an error: $_"
+            }
+        }
+        if($manage -eq "Uninstalling"){
+            throw "not yet implemented";
+        }
+        $X++
+    }
+    Write-Progress -Activity "$manage Applications" -Status "Finished" -Completed
+    return;
+}
 Function Install-WinUtilProgramWinget {
 
     <#
@@ -717,60 +767,64 @@ Function Install-WinUtilProgramWinget {
         $ProgramsToInstall,
         $manage = "Installing"
     )
-
+    
     $x = 0
-    $count = $($ProgramsToInstall -split ",").Count
+    $count = $ProgramsToInstall.Count
 
     Write-Progress -Activity "$manage Applications" -Status "Starting" -PercentComplete 0
 
-    Foreach ($Program in $($ProgramsToInstall -split ",")){
-
-        Write-Progress -Activity "$manage Applications" -Status "$manage $Program $($x + 1) of $count" -PercentComplete $($x/$count*100)
+    Foreach ($Program in $ProgramsToInstall){
+        $failedPackages = @()
+        Write-Progress -Activity "$manage Applications" -Status "$manage $($Program.winget) $($x + 1) of $count" -PercentComplete $($x/$count*100)
         if($manage -eq "Installing"){
             # Install package via ID, if it fails try again with different scope and then with an unelevated prompt. 
             # Since Install-WinGetPackage might not be directly available, we use winget install command as a workaround.
             # Winget, not all installers honor any of the following: System-wide, User Installs, or Unelevated Prompt OR Silent Install Mode.
             # This is up to the individual package maintainers to enable these options. Aka. not as clean as Linux Package Managers.
             try {
-                $status = $(Start-Process -FilePath "winget" -ArgumentList "install --id $Program --silent --accept-source-agreements --accept-package-agreements" -Wait -PassThru).ExitCode
-                if($status -ne 0){
-                    Write-Host "Attempt with User scope"
-                    $status = $(Start-Process -FilePath "winget" -ArgumentList "install --id $Program --scope user --silent --accept-source-agreements --accept-package-agreements" -Wait -PassThru).ExitCode
-                    if($status -ne 0){
-                        Write-Host "Attempt with Unelevated prompt"
-                        $status = $(Start-Process -FilePath "powershell" -ArgumentList "-Command Start-Process winget -ArgumentList 'install --id $Program --silent --accept-source-agreements --accept-package-agreements' -Verb runAsUser" -Wait -PassThru).ExitCode
-                        if($status -ne 0){
-                            Write-Host "Failed to install $Program."
-                        } else {
-                            Write-Host "$Program installed successfully with Unelevated prompt."
-                        }
-                    } else {
-                        Write-Host "$Program installed successfully with User scope."
-                    }
-                } else {
-                    Write-Host "$Program installed successfully."
+                $status = $(Start-Process -FilePath "winget" -ArgumentList "install --id $($Program.winget) --silent --accept-source-agreements --accept-package-agreements" -Wait -PassThru).ExitCode
+                if($status -eq 0){
+                    Write-Host "$($Program.winget) installed successfully."
+                    continue
                 }
+                Write-Host "Attempt with User scope"
+                $status = $(Start-Process -FilePath "winget" -ArgumentList "install --id $($Program.winget) --scope user --silent --accept-source-agreements --accept-package-agreements" -Wait -PassThru).ExitCode
+                if($status -eq 0){
+                    Write-Host "$($Program.winget) installed successfully with User scope."
+                    continue
+                }
+                <# Write-Host "Attempt with Unelevated prompt"
+                $process = Start-Process -FilePath "powershell" -ArgumentList "-Command Start-Process winget -ArgumentList 'install --id $($Program.winget) --silent --accept-source-agreements --accept-package-agreements' -Verb runAsUser" -Wait -PassThru
+                if($process.ExitCode -eq 0){
+                    Write-Host "$($Program.winget) installed successfully with Unelevated prompt."
+                    continue
+                } #>
+                Write-Host "Failed to install $($Program.winget). With winget"
+                $failedPackages += $($Program.winget)
             } catch {
-                Write-Host "Failed to install $Program due to an error: $_"
-            }
+                Write-Host "Failed to install $($Program.winget) due to an error: $_"
+                $failedPackages += $($Program.winget)
+                }
         }
         if($manage -eq "Uninstalling"){
             # Uninstall package via ID using winget directly.
             try {
-                $status = $(Start-Process -FilePath "winget" -ArgumentList "uninstall --id $Program --silent" -Wait -PassThru).ExitCode
+                $status = $(Start-Process -FilePath "winget" -ArgumentList "uninstall --id $($Program.winget) --silent" -Wait -PassThru).ExitCode
                 if($status -ne 0){
-                    Write-Host "Failed to uninstall $Program."
+                    Write-Host "Failed to uninstall $($Program.winget)."
                 } else {
-                    Write-Host "$Program uninstalled successfully."
+                    Write-Host "$($Program.winget) uninstalled successfully."
+                    $failedPackages += $($Program.winget)
                 }
             } catch {
-                Write-Host "Failed to uninstall $Program due to an error: $_"
+                Write-Host "Failed to uninstall $($Program.winget) due to an error: $_"
+                $failedPackages += $($Program.winget)
             }
         }
         $X++
     }
-
     Write-Progress -Activity "$manage Applications" -Status "Finished" -Completed
+    return $failedPackages;
 }
 function Install-WinUtilWinget {
     <#
@@ -3609,7 +3663,7 @@ function Invoke-WPFInstall {
     }
 
     $WingetInstall = (Get-WinUtilCheckBoxes)["Install"]
-
+    Write-Host $WingetInstall
     if ($wingetinstall.Count -eq 0) {
         $WarningMsg = "Please select the program(s) to install or upgrade"
         [System.Windows.MessageBox]::Show($WarningMsg, $AppTitle, [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
@@ -3618,13 +3672,36 @@ function Invoke-WPFInstall {
 
     Invoke-WPFRunspace -ArgumentList $WingetInstall -DebugPreference $DebugPreference -ScriptBlock {
         param($WingetInstall, $DebugPreference)
+        $packagesWinget, $packagesChoco = {
+            $packagesWinget = @()
+            $packagesChoco = @()
+            foreach ($package in $WingetInstall) {
+                if ($package.winget -eq "na") {
+                    $packagesChoco += $package
+                    Write-Host "Queueing $($package.choco) for Chocolatey install"
+                } else {
+                    $packagesWinget += $package
+                    Write-Host "Queueing $($package.winget) for Winget install"
+                }
+            }
+            return $packages, $packagesChoco
+        }.Invoke($WingetInstall)
 
         try{
             $sync.ProcessRunning = $true
-
+            $errorPackages = @()
             Install-WinUtilWinget
-            Install-WinUtilProgramWinget -ProgramsToInstall $WingetInstall
-
+            Write-Host $packagesWinget
+            Write-Host $packagesChoco
+            Write-Host "==========================================="
+            Write-Host "--     installing winget packages       ---"
+            Write-Host "==========================================="
+            $errorPackages += Install-WinUtilProgramWinget -ProgramsToInstall $packagesWinget
+            Write-Host "==========================================="
+            Write-Host "--   insstalling Chocolatey pacakages   ---"
+            Write-Host "==========================================="
+            $errorPackages| ForEach-Object {if($_.choco -ne "na") {$packagesChoco += $_}}
+            Install-WinUtilProgramChoco -ProgramsToInstall $packagesChoco
             Write-Host "==========================================="
             Write-Host "--      Installs have finished          ---"
             Write-Host "==========================================="
