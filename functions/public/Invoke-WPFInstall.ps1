@@ -13,7 +13,7 @@ function Invoke-WPFInstall {
     }
 
     $WingetInstall = (Get-WinUtilCheckBoxes)["Install"]
-
+    Write-Host $WingetInstall
     if ($wingetinstall.Count -eq 0) {
         $WarningMsg = "Please select the program(s) to install or upgrade"
         [System.Windows.MessageBox]::Show($WarningMsg, $AppTitle, [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
@@ -22,13 +22,36 @@ function Invoke-WPFInstall {
 
     Invoke-WPFRunspace -ArgumentList $WingetInstall -DebugPreference $DebugPreference -ScriptBlock {
         param($WingetInstall, $DebugPreference)
+        $packagesWinget, $packagesChoco = {
+            $packagesWinget = @()
+            $packagesChoco = @()
+            foreach ($package in $WingetInstall) {
+                if ($package.winget -eq "na") {
+                    $packagesChoco += $package
+                    Write-Host "Queueing $($package.choco) for Chocolatey install"
+                } else {
+                    $packagesWinget += $package
+                    Write-Host "Queueing $($package.winget) for Winget install"
+                }
+            }
+            return $packages, $packagesChoco
+        }.Invoke($WingetInstall)
 
         try{
             $sync.ProcessRunning = $true
-
+            $errorPackages = @()
             Install-WinUtilWinget
-            Install-WinUtilProgramWinget -ProgramsToInstall $WingetInstall
-
+            Write-Host $packagesWinget
+            Write-Host $packagesChoco
+            Write-Host "==========================================="
+            Write-Host "--     installing winget packages       ---"
+            Write-Host "==========================================="
+            $errorPackages += Install-WinUtilProgramWinget -ProgramsToInstall $packagesWinget
+            Write-Host "==========================================="
+            Write-Host "--   insstalling Chocolatey pacakages   ---"
+            Write-Host "==========================================="
+            $errorPackages| ForEach-Object {if($_.choco -ne "na") {$packagesChoco += $_}}
+            Install-WinUtilProgramChoco -ProgramsToInstall $packagesChoco
             Write-Host "==========================================="
             Write-Host "--      Installs have finished          ---"
             Write-Host "==========================================="
