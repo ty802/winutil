@@ -31,7 +31,7 @@ function Install-WinUtilProgramChoco {
 
     Write-Progress -Activity "$manage Applications" -Status "Starting" -PercentComplete 0
     Write-Host "==========================================="
-    Write-Host "--   insstalling Chocolatey pacakages   ---"
+    Write-Host "--   Configuring Chocolatey pacakages   ---"
     Write-Host "==========================================="
     Foreach ($Program in $ProgramsToInstall){
         Write-Progress -Activity "$manage Applications" -Status "$manage $($Program.choco) $($x + 1) of $count" -PercentComplete $($x/$count*100)
