@@ -1,3 +1,4 @@
+using Module .\types.ps1
 $OFS = "`r`n"
 $scriptname = "winutil.ps1"
 # Variable to sync between runspaces
@@ -19,41 +20,96 @@ Write-output '
 ' | Out-File ./$scriptname -Append -Encoding ascii
 
 (Get-Content .\scripts\start.ps1).replace('#{replaceme}',"$(Get-Date -Format yy.MM.dd)") | Out-File ./$scriptname -Append -Encoding ascii
-
+Get-Content .\types.ps1 |Out-File ./$scriptname -Append -Encoding ascii
 Get-ChildItem .\functions -Recurse -File | ForEach-Object {
     Get-Content $psitem.FullName | Out-File ./$scriptname -Append -Encoding ascii
 }
 
 Get-ChildItem .\config | Where-Object {$psitem.extension -eq ".json"} | ForEach-Object {
     $json = (Get-Content $psitem.FullName).replace("'","''")
-
+    
     # Replace every XML Special Character so it'll render correctly in final build
     # Only do so if json files has content to be displayed (for example the applications, tweaks, features json files)
-        # Some Type Convertion using Casting and Cleaning Up of the convertion result using 'Replace' Method
-        $jsonAsObject = $json | convertfrom-json
-        $firstLevelJsonList = ([System.String]$jsonAsObject).split('=;') | ForEach-Object {
-            $_.Replace('=}','').Replace('@{','').Replace(' ','')
+    # Some Type Convertion using Casting and Cleaning Up of the convertion result using 'Replace' Method
+    $jsonAsObject = $json | convertfrom-json
+    $firstLevelJsonList = ([System.String]$jsonAsObject).split('=;') | ForEach-Object {
+        $_.Replace('=}','').Replace('@{','').Replace(' ','')
+    }
+    
+    for ($i = 0; $i -lt $firstLevelJsonList.Count; $i += 1) {
+        $firstLevelName = $firstLevelJsonList[$i]
+        # Note: Avoid using HTML Entity Codes (for example '&rdquo;' (stands for "Right Double Quotation Mark")), and use HTML decimal/hex codes instead.
+        # as using HTML Entity Codes will result in XML parse Error when running the compiled script.
+        if ($jsonAsObject.$firstLevelName.content -ne $null) {
+            $jsonAsObject.$firstLevelName.content = $jsonAsObject.$firstLevelName.content.replace('&','&#38;').replace('“','&#8220;').replace('”','&#8221;').replace("'",'&#39;').replace('<','&#60;').replace('>','&#62;')
+            $jsonAsObject.$firstLevelName.content = $jsonAsObject.$firstLevelName.content.replace('&#39;&#39;',"&#39;") # resolves the Double Apostrophe caused by the first replace function in the main loop
         }
-
-       for ($i = 0; $i -lt $firstLevelJsonList.Count; $i += 1) {
-            $firstLevelName = $firstLevelJsonList[$i]
-            # Note: Avoid using HTML Entity Codes (for example '&rdquo;' (stands for "Right Double Quotation Mark")), and use HTML decimal/hex codes instead.
-	    # as using HTML Entity Codes will result in XML parse Error when running the compiled script.
-	    if ($jsonAsObject.$firstLevelName.content -ne $null) {
-                $jsonAsObject.$firstLevelName.content = $jsonAsObject.$firstLevelName.content.replace('&','&#38;').replace('“','&#8220;').replace('”','&#8221;').replace("'",'&#39;').replace('<','&#60;').replace('>','&#62;')
-                $jsonAsObject.$firstLevelName.content = $jsonAsObject.$firstLevelName.content.replace('&#39;&#39;',"&#39;") # resolves the Double Apostrophe caused by the first replace function in the main loop
+        if ($jsonAsObject.$firstLevelName.description -ne $null) {
+            $jsonAsObject.$firstLevelName.description = $jsonAsObject.$firstLevelName.description.replace('&','&#38;').replace('“','&#8220;').replace('”','&#8221;').replace("'",'&#39;').replace('<','&#60;').replace('>','&#62;')
+            $jsonAsObject.$firstLevelName.description = $jsonAsObject.$firstLevelName.description.replace('&#39;&#39;',"&#39;") # resolves the Double Apostrophe caused by the first replace function in the main loop
+        }
+    }
+    # The replace at the end is required, as without it the output of converto-json will be somewhat weird for Multiline String
+    # Most Notably is the scripts in json files, make=ing it harder for users who want to review these scripts that are found in the final compiled script
+    $json = ($jsonAsObject | convertto-json -Depth 3).replace('\r\n',"`r`n")
+    $jsonName =$psitem.BaseName
+    switch ($jsonName) {
+        "applications" {
+            $jsonAsObject = $json | convertfrom-json
+            $dict = [System.Collections.Generic.Dictionary`2[System.String,PackageInfo]]::new();
+            $members = Get-Member -InputObject $jsonAsObject | Where-Object MemberType -eq "NoteProperty"
+            foreach($prop in $members){
+                $name = $prop.Name
+                $package = [PackageInfo]@{
+                    category = $jsonAsObject.$name.category
+                    choco = $jsonAsObject.$name.choco
+                    content = $jsonAsObject.$name.content
+                    description = $jsonAsObject.$name.description
+                    link = $jsonAsObject.$name.link
+                    winget = $jsonAsObject.$name.winget
+                }
+                $dict.add($name,$package)
             }
-            if ($jsonAsObject.$firstLevelName.description -ne $null) {
-                $jsonAsObject.$firstLevelName.description = $jsonAsObject.$firstLevelName.description.replace('&','&#38;').replace('“','&#8220;').replace('”','&#8221;').replace("'",'&#39;').replace('<','&#60;').replace('>','&#62;')
-                $jsonAsObject.$firstLevelName.description = $jsonAsObject.$firstLevelName.description.replace('&#39;&#39;',"&#39;") # resolves the Double Apostrophe caused by the first replace function in the main loop
-	    }
-	}
-	# The replace at the end is required, as without it the output of converto-json will be somewhat weird for Multiline String
-	# Most Notably is the scripts in json files, make=ing it harder for users who want to review these scripts that are found in the final compiled script
-        $json = ($jsonAsObject | convertto-json -Depth 3).replace('\r\n',"`r`n")
+            $sync.configs.$jsonName = $dict
+        }
+        Default {
+            $sync.configs.$jsonName = $json | convertfrom-json
+        }
+    }
+    Write-Debug $jsonName
+    $code = switch ($jsonName) {
+        "applications" {@"
+`$json = @'
+$json 
+`'@
 
-    $sync.configs.$($psitem.BaseName) = $json | convertfrom-json
-    Write-output "`$sync.configs.$($psitem.BaseName) = '$json' `| convertfrom-json" | Out-File ./$scriptname -Append -Encoding ascii
+`$jsonAsObject = `$json | convertfrom-json
+#`$dict = [System.Collections.Generic.Dictionary``2[System.String,PackageInfo]]::new();
+`$dict = New-Object 'System.Collections.Generic.Dictionary[string,PackageInfo]'
+`$members = Get-Member -InputObject `$jsonAsObject | Where-Object MemberType -eq "NoteProperty"
+foreach(`$prop in `$members){
+    `$name = `$prop.Name
+    `$package = [PackageInfo]@{
+        category = `$jsonAsObject.`$name.category
+        choco = `$jsonAsObject.`$name.choco
+        content = `$jsonAsObject.`$name.content
+        description = `$jsonAsObject.`$name.description
+        link = `$jsonAsObject.`$name.link
+        winget = `$jsonAsObject.`$name.winget
+    }
+    `$dict.add(`$name,`$package)
+}
+`$sync.configs.$jsonName = `$dict
+
+
+
+"@}
+        Default {
+            "`$sync.configs.$jsonName = '$json' | convertfrom-json"
+        }
+    }
+    Write-output "$code" | Out-File ./$scriptname -Append -Encoding ascii
+    #"`$sync.configs.$($psitem.BaseName) = '$json' `| convertfrom-json" | Out-File ./$scriptname -Append -Encoding ascii
 }
 Get-ChildItem .\config | Where-Object {$PSItem.Extension -eq ".cfg"} | ForEach-Object {
     Write-output "`$sync.configs.$($psitem.BaseName) = '$(Get-Content $PSItem.FullName)'" | Out-File ./$scriptname -Append -Encoding ascii

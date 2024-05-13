@@ -21,7 +21,15 @@ function Get-TabXaml {
     )
     $organizedData = @{}
     # Iterate through JSON data and organize by panel and category
-    foreach ($appName in $sync.configs.$tabname.PSObject.Properties.Name) {
+
+    if($tabname -eq "applications")
+    {
+        Write-Debug "$tabname is apps"
+        $keys = $sync.configs.$tabname.Keys
+    } else {
+        $keys = $sync.configs.$tabname.PSObject.Properties.Name
+    }
+    foreach ($appName in $keys) {
         $appInfo = $sync.configs.$tabname.$appName
 
         # Create an object for the application

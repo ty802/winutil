@@ -51,10 +51,14 @@ Function Get-WinUtilCheckBoxes {
                 $feature = switch ($group) {
                     "Install" {
                         # Get the winget value
+                        <#
                         [PsCustomObject]@{
                             winget="$($sync.configs.applications.$($CheckBox.Name).winget)";
                             choco="$($sync.configs.applications.$($CheckBox.Name).choco)";
                         }
+                        #>
+                        Write-Debug ($sync.configs.applications.GetType() | Format-Custom | Out-String)
+                        $sync.configs.applications.item($CheckBox.Name)
 
                     }
                     default {
